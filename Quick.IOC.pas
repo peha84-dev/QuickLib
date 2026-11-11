@@ -1,13 +1,13 @@
 { ***************************************************************************
 
-  Copyright (c) 2016-2022 Kike Pérez
+  Copyright (c) 2016-2026 Kike Perez
 
   Unit        : Quick.IoC
   Description : IoC Dependency Injector
-  Author      : Kike Pérez
+  Author      : Kike Perez
   Version     : 1.0
   Created     : 19/10/2019
-  Modified    : 19/01/2022
+  Modified    : 08/05/2026
 
   This file is part of QuickLib: https://github.com/exilon/QuickLib
 
@@ -41,6 +41,7 @@ uses
   {$ENDIF}
   System.TypInfo,
   System.Generics.Collections,
+  System.Generics.Defaults,
   Quick.Logger.Intf,
   Quick.Options;
 
@@ -100,18 +101,17 @@ type
     function GetKey(aPInfo : PTypeInfo; const aName : string = ''): string;
     function RegisterType(aTypeInfo : PTypeInfo; aImplementation : TClass; const aName : string = '') : TIocRegistration;
     function RegisterInstance(aTypeInfo : PTypeInfo; const aName : string = '') : TIocRegistration;
-    procedure Unregister(aTypeInfo : PTypeInfo; const aName : string = '');
   end;
 
   TIocRegistrator = class(TInterfacedObject,IIocRegistrator)
   private
-    fDependencies : TDictionary<string,TIocRegistration>;
-    fDependencyOrder : TList<TIocRegistration>;
+    fDependencies : TDictionary<string, TObjectList<TIocRegistration>>;
+    fDependencyOrder : TObjectList<TIocRegistration>;
   public
     constructor Create;
     destructor Destroy; override;
-    property Dependencies : TDictionary<string,TIocRegistration> read fDependencies write fDependencies;
-    property DependencyOrder : TList<TIocRegistration> read fDependencyOrder;
+    property Dependencies : TDictionary<string, TObjectList<TIocRegistration>> read fDependencies write fDependencies;
+    property DependencyOrder : TObjectList<TIocRegistration> read fDependencyOrder;
     function IsRegistered<TInterface: IInterface; TImplementation: class>(const aName : string = '') : Boolean; overload;
     function IsRegistered<T>(const aName : string = '') : Boolean; overload;
     function GetKey(aPInfo : PTypeInfo; const aName : string = ''): string;
@@ -121,8 +121,8 @@ type
     function RegisterInstance<T : class>(const aName : string = '') : TIocRegistration<T>; overload;
     function RegisterInstance<TInterface : IInterface>(aInstance : TInterface; const aName : string = '') : TIocRegistration; overload;
     function RegisterOptions<T : TOptions>(aOptions : T) : TIocRegistration<T>;
-    procedure Unregister<TInterface: IInterface>(const aName : string = ''); overload;
-    procedure Unregister(aTypeInfo : PTypeInfo; const aName : string = ''); overload;
+    /// <summary>Remove all registrations for the given key. Frees existing registration objects.</summary>
+    function RemoveRegistrations(const aKey: string): Boolean;
   end;
 
   IIocContainer = interface
@@ -130,7 +130,6 @@ type
     function RegisterType(aInterface: PTypeInfo; aImplementation : TClass; const aName : string = '') : TIocRegistration;
     function RegisterInstance(aTypeInfo : PTypeInfo; const aName : string = '') : TIocRegistration;
     function Resolve(aServiceType: PTypeInfo; const aName : string = ''): TValue;
-    procedure Unregister(aTypeInfo : PTypeInfo; const aName : string = '');
     procedure Build;
   end;
 
@@ -158,12 +157,12 @@ type
     function ResolveAll<T>(const aName : string = '') : TList<T>;
   end;
 
-  TTypedFactory<T : class, constructor> = class(TVirtualInterface)
-  private
-    fResolver : TIocResolver;
-  public
-    constructor Create(PIID: PTypeInfo; aResolver : TIocResolver);
-    procedure DoInvoke(Method: TRttiMethod;  const Args: TArray<TValue>; out Result: TValue);
+  // Non-generic helper for typed factory creation (kept for possible future use)
+  TTypedFactoryHelper = class
+  end;
+
+  // Stub kept for API/return-type compatibility
+  TTypedFactory<T : class, constructor> = class(TInterfacedObject)
   end;
 
   IFactory<T> = interface
@@ -218,15 +217,15 @@ type
     function AbstractFactory<T : class, constructor> : T; overload;
     function RegisterTypedFactory<TFactoryInterface : IInterface; TFactoryType : class, constructor>(const aName : string = '') : TIocRegistration<TTypedFactory<TFactoryType>>;
     function RegisterSimpleFactory<TInterface : IInterface; TImplementation : class, constructor>(const aName : string = '') : TIocRegistration;
-    procedure Unregister<TInterface: IInterface>(const aName : string = ''); overload;
-    procedure Unregister(aInterface: PTypeInfo; const aName : string = ''); overload;
     procedure Build;
+    /// <summary>Exposes the internal registrator for advanced operations (Replace, Decorate).</summary>
+    property Registrator: TIocRegistrator read fRegistrator;
   end;
 
   TIocServiceLocator = class
   public
     class function GetService<T> : T;
-    class function TryToGetService<T: IInterface>(aService : T) : Boolean;
+    class function TryToGetService<T: IInterface>(out aService : T) : Boolean;
   end;
 
   Name = class(TCustomAttribute)
@@ -260,8 +259,9 @@ end;
 
 { TIocRegistration }
 
-constructor TIocRegistration.Create;
+constructor TIocRegistration.Create(const aName : string);
 begin
+  fName := aName;
   fRegisterMode := TRegisterMode.rmTransient;
 end;
 
@@ -381,28 +381,28 @@ begin
   Result := fRegistrator.RegisterType(aInterface,aImplementation,aName);
 end;
 
-procedure TIocContainer.Unregister<TInterface>(const aName : string = '');
-begin
-  fRegistrator.Unregister<TInterface>(aName);
-end;
-
-procedure TIocContainer.Unregister(aInterface: PTypeInfo; const aName : string = '');
-begin
-  fRegistrator.Unregister(aInterface, aName);
-end;
-
-
 function TIocContainer.RegisterInstance<T>(const aName: string): TIocRegistration<T>;
 begin
   Result := fRegistrator.RegisterInstance<T>(aName);
 end;
 
 function TIocContainer.RegisterTypedFactory<TFactoryInterface,TFactoryType>(const aName: string): TIocRegistration<TTypedFactory<TFactoryType>>;
+var
+  factory : TSimpleFactory<TFactoryType>;
+  factoryAsIntf : IInterface;
+  typedIntf : TFactoryInterface;
 begin
-  Result := fRegistrator.RegisterType<TFactoryInterface,TTypedFactory<TFactoryType>>(aName).DelegateTo(function : TTypedFactory<TFactoryType>
-                                                    begin
-                                                      Result := TTypedFactory<TFactoryType>.Create(TypeInfo(TFactoryInterface),fResolver);
-                                                    end);
+  factory := TSimpleFactory<TFactoryType>.Create(fResolver);
+  factoryAsIntf := factory;
+  if factoryAsIntf.QueryInterface(GetTypeData(TypeInfo(TFactoryInterface))^.Guid, typedIntf) = S_OK then
+  begin
+    // TFactoryInterface is compatible with IFactory<TFactoryType> - use direct registration
+    fRegistrator.RegisterInstance<TFactoryInterface>(typedIntf, aName).AsSingleton;
+  end
+  else
+    raise EIocResolverError.CreateFmt('AddTypedFactory: %s must be IFactory<%s> on Win64',
+      [GetTypeName(TypeInfo(TFactoryInterface)), TFactoryType.ClassName]);
+  Result := Default(TIocRegistration<TTypedFactory<TFactoryType>>);
 end;
 
 function TIocContainer.RegisterInstance(aTypeInfo : PTypeInfo; const aName : string = '') : TIocRegistration;
@@ -453,28 +453,32 @@ end;
 
 constructor TIocRegistrator.Create;
 begin
-  fDependencies := TDictionary<string,TIocRegistration>.Create;
-  fDependencyOrder := TList<TIocRegistration>.Create;
+  fDependencies := TDictionary<string, TObjectList<TIocRegistration>>.Create;
+  fDependencyOrder := TObjectList<TIocRegistration>.Create(False); // Does not own objects
 end;
 
 destructor TIocRegistrator.Destroy;
 var
   i : Integer;
-  regs : TArray<TIocRegistration>;
+  regList : TObjectList<TIocRegistration>;
 begin
+  // Free singleton instances that are not interfaced (non-reference counted objects)
   for i := fDependencyOrder.Count-1 downto 0 do
   begin
     if fDependencyOrder[i] <> nil then
     begin
-      //free singleton instances not interfaced
       if (fDependencyOrder[i] is TIocRegistrationInstance) and
           (TIocRegistrationInstance(fDependencyOrder[i]).IsSingleton) then
             TIocRegistrationInstance(fDependencyOrder[i]).Instance.Free;
-      fDependencyOrder[i].Free;
     end;
   end;
-  fDependencies.Free;
-  fDependencyOrder.Free;
+  // Manually free all the lists (each list will free its registrations because OwnsObjects = True)
+  for regList in fDependencies.Values do
+  begin
+    regList.Free;
+  end;
+  fDependencies.Free; // Free the dictionary itself
+  fDependencyOrder.Free; // Just frees the list, not the objects (OwnsObjects = False)
   inherited;
 end;
 
@@ -495,28 +499,47 @@ end;
 function TIocRegistrator.IsRegistered<TInterface, TImplementation>(const aName: string): Boolean;
 var
   key : string;
+  regList : TObjectList<TIocRegistration>;
   reg : TIocRegistration;
 begin
   Result := False;
   key := GetKey(TypeInfo(TInterface),aName);
-  if fDependencies.TryGetValue(key,reg) then
+  if fDependencies.TryGetValue(key, regList) then
   begin
-    if reg.&Implementation = TImplementation then Result := True;
-  end
+    for reg in regList do
+    begin
+      if reg.&Implementation = TImplementation then
+      begin
+        Result := True;
+        Break;
+      end;
+    end;
+  end;
 end;
 
 function TIocRegistrator.IsRegistered<T>(const aName: string): Boolean;
-var
-  key : string;
-  reg : TIocRegistration;
 begin
-  Result := False;
-  key := GetKey(TypeInfo(T),aName);
-  if fDependencies.TryGetValue(key,reg) then
+  Result := fDependencies.ContainsKey(GetKey(TypeInfo(T),aName));
+end;
+
+function TIocRegistrator.RemoveRegistrations(const aKey: string): Boolean;
+var
+  regList : TObjectList<TIocRegistration>;
+  reg     : TIocRegistration;
+  idx     : Integer;
+begin
+  Result := fDependencies.TryGetValue(aKey, regList);
+  if Result then
   begin
-    if reg is TIocRegistrationInterface then Result := True
-      else if (reg is TIocRegistrationInstance) {and (TIocRegistrationInterface(reg).Instance <> nil)} then Result := True;
-  end
+    // Remove registration references from the dependency-order list (does not own them)
+    for reg in regList do
+    begin
+      idx := fDependencyOrder.IndexOf(reg);
+      if idx >= 0 then fDependencyOrder.Delete(idx);
+    end;
+    fDependencies.Remove(aKey); // removes key but does NOT free regList
+    regList.Free;               // free the list (OwnsObjects=True â†’ frees registrations)
+  end;
 end;
 
 function TIocRegistrator.RegisterInstance<T>(const aName: string): TIocRegistration<T>;
@@ -531,42 +554,42 @@ function TIocRegistrator.RegisterInstance<TInterface>(aInstance: TInterface; con
 var
   key : string;
   tpinfo : PTypeInfo;
+  regList : TObjectList<TIocRegistration>;
 begin
   tpinfo := TypeInfo(TInterface);
   key := GetKey(tpinfo,aName);
-  if fDependencies.TryGetValue(key,Result) then
+  
+  if not fDependencies.TryGetValue(key, regList) then
   begin
-    if Result.&Implementation = tpinfo.TypeData.ClassType then raise EIocRegisterError.Create('Implementation is already registered!');
-  end
-  else
-  begin
-    Result := TIocRegistrationInterface.Create(aName);
-    Result.IntfInfo := tpinfo;
-    TIocRegistrationInterface(Result).Instance := aInstance;
-    //reg.Instance := T.Create;
-    fDependencies.Add(key,Result);
-    fDependencyOrder.Add(Result);
+    regList := TObjectList<TIocRegistration>.Create(True); // Owns objects
+    fDependencies.Add(key, regList);
   end;
+  
+  Result := TIocRegistrationInterface.Create(aName);
+  Result.IntfInfo := tpinfo;
+  TIocRegistrationInterface(Result).Instance := aInstance;
+  regList.Add(Result);
+  fDependencyOrder.Add(Result);
 end;
 
 function TIocRegistrator.RegisterInstance(aTypeInfo : PTypeInfo; const aName : string = '') : TIocRegistration;
 var
   key : string;
+  regList : TObjectList<TIocRegistration>;
 begin
   key := GetKey(aTypeInfo,aName);
-  if fDependencies.TryGetValue(key,Result) then
+  
+  if not fDependencies.TryGetValue(key, regList) then
   begin
-    if Result.&Implementation = aTypeInfo.TypeData.ClassType then raise EIocRegisterError.Create('Implementation is already registered!');
-  end
-  else
-  begin
-    Result := TIocRegistrationInstance.Create(aName);
-    Result.IntfInfo := aTypeInfo;
-    Result.&Implementation := aTypeInfo.TypeData.ClassType;
-    //reg.Instance := T.Create;
-    fDependencies.Add(key,Result);
-    fDependencyOrder.Add(Result);
+    regList := TObjectList<TIocRegistration>.Create(True); // Owns objects
+    fDependencies.Add(key, regList);
   end;
+  
+  Result := TIocRegistrationInstance.Create(aName);
+  Result.IntfInfo := aTypeInfo;
+  Result.&Implementation := aTypeInfo.TypeData.ClassType;
+  regList.Add(Result);
+  fDependencyOrder.Add(Result);
 end;
 
 function TIocRegistrator.RegisterOptions<T>(aOptions: T): TIocRegistration<T>;
@@ -574,22 +597,23 @@ var
   pInfo : PTypeInfo;
   key : string;
   reg : TIocRegistration;
+  regList : TObjectList<TIocRegistration>;
 begin
   pInfo := TypeInfo(IOptions<T>);
   key := GetKey(pInfo,'');
-  if fDependencies.TryGetValue(key,reg) then
+  
+  if not fDependencies.TryGetValue(key, regList) then
   begin
-    if reg.&Implementation = aOptions.ClassType then raise EIocRegisterError.Create('Implementation for this interface is already registered!');
-  end
-  else
-  begin
-    reg := TIocRegistrationInterface.Create('');
-    reg.IntfInfo := pInfo;
-    reg.&Implementation := aOptions.ClassType;
-    TIocRegistrationInterface(reg).Instance := TOptionValue<T>.Create(aOptions);
-    fDependencies.Add(key,reg);
-    fDependencyOrder.Add(reg);
+    regList := TObjectList<TIocRegistration>.Create(True); // Owns objects
+    fDependencies.Add(key, regList);
   end;
+  
+  reg := TIocRegistrationInterface.Create('');
+  reg.IntfInfo := pInfo;
+  reg.&Implementation := aOptions.ClassType;
+  TIocRegistrationInterface(reg).Instance := TOptionValue<T>.Create(aOptions);
+  regList.Add(reg);
+  fDependencyOrder.Add(reg);
   Result := TIocRegistration<T>.Create(reg);
 end;
 
@@ -604,43 +628,21 @@ end;
 function TIocRegistrator.RegisterType(aTypeInfo : PTypeInfo; aImplementation : TClass; const aName : string = '') : TIocRegistration;
 var
   key : string;
+  regList : TObjectList<TIocRegistration>;
 begin
   key := GetKey(aTypeInfo,aName);
-  if fDependencies.TryGetValue(key,Result) then
+  
+  if not fDependencies.TryGetValue(key, regList) then
   begin
-    if Result.&Implementation = aImplementation then raise EIocRegisterError.Create('Implementation for this interface is already registered!')
-      else Key := key + '#' + TGUID.NewGuid.ToString;
+    regList := TObjectList<TIocRegistration>.Create(True); // Owns objects
+    fDependencies.Add(key, regList);
   end;
+  
   Result := TIocRegistrationInterface.Create(aName);
   Result.IntfInfo := aTypeInfo;
   Result.&Implementation := aImplementation;
-  fDependencies.Add(key,Result);
+  regList.Add(Result);
   fDependencyOrder.Add(Result);
-end;
-
-procedure TIocRegistrator.Unregister<TInterface>(const aName : string);
-begin
-  Unregister(TypeInfo(TInterface), aName);
-end;
-
-procedure TIocRegistrator.Unregister(aTypeInfo : PTypeInfo; const aName : string);
-var
-  key: string;
-  vValue: TIocRegistration;
-begin
-  key := GetKey(aTypeInfo, aName);
-
-  if fDependencies.TryGetValue(key,vValue) then
-  begin
-    if (vValue.IntfInfo = aTypeInfo) and (vValue.Name = aName) then
-    begin
-      if fDependencyOrder.Contains(vValue) then
-        fDependencyOrder.Remove(vValue);
-      fDependencies.Remove(key);
-      vValue.Free;
-    end;
-  end;
-
 end;
 
 { TIocResolver }
@@ -656,46 +658,84 @@ var
   ctx : TRttiContext;
   rtype : TRttiType;
   rmethod : TRttiMethod;
-  rParam : TRttiParameter;
-  value : TValue;
-  values : TArray<TValue>;
-  att: TCustomAttribute;
-  attname: string;
+  ownCtors : TList<TRttiMethod>;
+  inheritedCtors : TList<TRttiMethod>;
+  allCtors : TList<TRttiMethod>;
+  bestCtor : TRttiMethod;
+
+  function TryInvoke(aCtor: TRttiMethod; out aResult: TValue): Boolean;
+  var
+    lParam : TRttiParameter;
+    lAtt : TCustomAttribute;
+    lName : string;
+    lVal : TValue;
+    lVals : TArray<TValue>;
+  begin
+    Result := False;
+    lVals := nil;
+    for lParam in aCtor.GetParameters do
+    begin
+      lName := EmptyStr;
+      for lAtt in lParam.GetAttributes do
+        if lAtt is Name then begin lName := Name(lAtt).Name; Break; end;
+      if lParam.ParamType.TypeKind in [tkClass, tkInterface] then
+      begin
+        try lVal := Resolve(lParam.ParamType.Handle, lName);
+        except on EIocResolverError do Exit; // required dep not found
+        end;
+      end
+      else
+      begin
+        try lVal := Resolve(lParam.ParamType.Handle, lName);
+        except on EIocResolverError do TValue.Make(nil, lParam.ParamType.Handle, lVal); end;
+      end;
+      lVals := lVals + [lVal];
+    end;
+    aResult := aCtor.Invoke(TRttiInstanceType(rtype).MetaclassType, lVals);
+    Result := True;
+  end;
+
 begin
   Result := nil;
   rtype := ctx.GetType(aClass);
   if rtype = nil then Exit;
-  for rmethod in TRttiInstanceType(rtype).GetMethods do
-  begin
-    if rmethod.IsConstructor then
-    begin
-      //if create don't have parameters
-      if Length(rmethod.GetParameters) = 0 then
-      begin
-        Result := rmethod.Invoke(TRttiInstanceType(rtype).MetaclassType,[]);
-        Break;
-      end
-      else
-      begin
-        for rParam in rmethod.GetParameters do
-        begin
-          attname := EmptyStr;
-          for att in rParam.GetAttributes do
-          begin
-            if att is Name then
-            begin
-              attname := Name(att).Name;
-              Break;
-            end;
-          end;
 
-          value := Resolve(rParam.ParamType.Handle, attname);
-          values := values + [value];
-        end;
-        Result := rmethod.Invoke(TRttiInstanceType(rtype).MetaclassType,values);
-        Break;
+  // Separate own constructors (declared on aClass) from inherited ones
+  ownCtors := TList<TRttiMethod>.Create;
+  inheritedCtors := TList<TRttiMethod>.Create;
+  try
+    for rmethod in TRttiInstanceType(rtype).GetMethods do
+    begin
+      if rmethod.IsConstructor then
+      begin
+        if rmethod.Parent = rtype then ownCtors.Add(rmethod)
+        else inheritedCtors.Add(rmethod);
       end;
     end;
+
+    // Sort own constructors: parameterless first, then by param count ascending
+    ownCtors.Sort(TComparer<TRttiMethod>.Construct(
+      function(const L, R: TRttiMethod): Integer
+      begin Result := Length(L.GetParameters) - Length(R.GetParameters); end));
+    inheritedCtors.Sort(TComparer<TRttiMethod>.Construct(
+      function(const L, R: TRttiMethod): Integer
+      begin Result := Length(L.GetParameters) - Length(R.GetParameters); end));
+
+    allCtors := TList<TRttiMethod>.Create;
+    try
+      allCtors.AddRange(ownCtors);
+      allCtors.AddRange(inheritedCtors);
+
+      for bestCtor in allCtors do
+      begin
+        if TryInvoke(bestCtor, Result) then Exit;
+      end;
+    finally
+      allCtors.Free;
+    end;
+  finally
+    ownCtors.Free;
+    inheritedCtors.Free;
   end;
 end;
 
@@ -711,7 +751,15 @@ begin
   {$IFDEF DEBUG_IOC}
   TDebugger.Trace(Self,'Resolving dependency: %s',[key]);
   {$ENDIF}
-  if not fRegistrator.Dependencies.TryGetValue(key,reg) then raise EIocResolverError.CreateFmt('Type "%s" not registered for IOC!',[aServiceType.Name]);
+  var regList: TObjectList<TIocRegistration>;
+  if not fRegistrator.Dependencies.TryGetValue(key, regList) then 
+    raise EIocResolverError.CreateFmt('Type "%s" not registered for IOC!',[aServiceType.Name]);
+  
+  if regList.Count = 0 then
+    raise EIocResolverError.CreateFmt('Type "%s" has empty registration list!',[aServiceType.Name]);
+    
+  reg := regList.Last; // Resolve LAST registered (.NET Core style)
+  
   //if is singleton return already instance if exists
   if reg.IsSingleton then
   begin
@@ -719,13 +767,15 @@ begin
     begin
       if TIocRegistrationInterface(reg).Instance <> nil then
       begin
-        if TIocRegistrationInterface(reg).Instance.QueryInterface(GetTypeData(aServiceType).Guid,intf) <> 0 then raise EIocResolverError.CreateFmt('Implementation for "%s" not registered!',[aServiceType.Name]);
+        if TIocRegistrationInterface(reg).Instance.QueryInterface(GetTypeData(aServiceType).Guid,intf) <> 0 then 
+          raise EIocResolverError.CreateFmt('Implementation for "%s" not registered!',[aServiceType.Name]);
         TValue.Make(@intf,aServiceType,Result);
         {$IFDEF DEBUG_IOC}
         TDebugger.Trace(Self,'Resolved dependency: %s',[reg.fIntfInfo.Name]);
         {$ENDIF}
         Exit;
       end;
+      // Instance is nil: fall through to create it below
     end
     else
     begin
@@ -737,19 +787,32 @@ begin
         {$ENDIF}
         Exit;
       end;
+      // Instance is nil: fall through to create it below
     end;
   end;
-  //instance not created yet
-  if reg.&Implementation = nil then raise EIocResolverError.CreateFmt('Implemention for "%s" not defined!',[aServiceType.Name]);
-  //use activator if assigned
+  //instance not created yet or needs to be created (transient)
+  //check if we need to create a new instance
   if reg is TIocRegistrationInterface then
   begin
+    //if instance already set (RegisterInstance<TInterface>(obj)), use it directly
+    if TIocRegistrationInterface(reg).Instance <> nil then
+    begin
+      if TIocRegistrationInterface(reg).Instance.QueryInterface(GetTypeData(aServiceType).Guid,intf) <> 0 then raise EIocResolverError.CreateFmt('Implementation for "%s" not registered!',[aServiceType.Name]);
+      TValue.Make(@intf,aServiceType,Result);
+      Exit;
+    end;
+
+    //otherwise, create new instance from &Implementation  
+    if reg.&Implementation = nil then raise EIocResolverError.CreateFmt('Implemention for "%s" not defined!',[aServiceType.Name]);
     {$IFDEF DEBUG_IOC}
     TDebugger.Trace(Self,'Building dependency: %s',[reg.fIntfInfo.Name]);
     {$ENDIF}
-    if Assigned(reg.ActivatorDelegate) then TIocRegistrationInterface(reg).Instance := reg.ActivatorDelegate().AsInterface
-      else TIocRegistrationInterface(reg).Instance := CreateInstance(reg.&Implementation).AsInterface;
-    if (TIocRegistrationInterface(reg).Instance = nil) or (TIocRegistrationInterface(reg).Instance.QueryInterface(GetTypeData(aServiceType).Guid,intf) <> 0) then raise EIocResolverError.CreateFmt('Implementation for "%s" not registered!',[aServiceType.Name]);
+    var newInst : IInterface;
+    if Assigned(reg.ActivatorDelegate) then newInst := reg.ActivatorDelegate().AsInterface
+      else newInst := CreateInstance(reg.&Implementation).AsInterface;
+    if (newInst = nil) or (newInst.QueryInterface(GetTypeData(aServiceType).Guid,intf) <> 0) then raise EIocResolverError.CreateFmt('Implementation for "%s" not registered!',[aServiceType.Name]);
+    // Only cache instance for singletons
+    if reg.IsSingleton then TIocRegistrationInterface(reg).Instance := newInst;
     TValue.Make(@intf,aServiceType,Result);
   end
   else
@@ -773,7 +836,7 @@ function TIocResolver.Resolve<T>(const aName : string = ''): T;
 var
   pInfo : PTypeInfo;
 begin
-  Result := Default(T);
+  //Result := Default(T);
   pInfo := TypeInfo(T);
 
   Result := Resolve(pInfo,aName).AsType<T>;
@@ -782,14 +845,25 @@ end;
 function TIocResolver.ResolveAll<T>(const aName : string = '') : TList<T>;
 var
   pInfo : PTypeInfo;
+  regList : TObjectList<TIocRegistration>;
   reg : TIocRegistration;
+  key : string;
+  resolved : TValue;
 begin
   Result := TList<T>.Create;
   pInfo := TypeInfo(T);
+  key := fRegistrator.GetKey(pInfo, aName);
 
-  for reg in fRegistrator.fDependencyOrder do
+  if fRegistrator.Dependencies.TryGetValue(key, regList) then
   begin
-    if reg.IntfInfo = pInfo then Self.Resolve(pInfo,aName);
+    for reg in regList do
+    begin
+      // Resolve each registration individually
+      // For singletons, this will return the same instance
+      // For transients, this will create new instances
+      resolved := Resolve(pInfo, reg.Name);
+      Result.Add(resolved.AsType<T>);
+    end;
   end;
 end;
 
@@ -827,19 +901,7 @@ begin
                                      end;
 end;
 
-{ TTypedFactory<T> }
-
-constructor TTypedFactory<T>.Create(PIID: PTypeInfo; aResolver : TIocResolver);
-begin
-  inherited Create(PIID, DoInvoke);
-  fResolver := aResolver;
-end;
-
-procedure TTypedFactory<T>.DoInvoke(Method: TRttiMethod; const Args: TArray<TValue>; out Result: TValue);
-begin
-  if CompareText(Method.Name,'New') <> 0 then raise Exception.Create('TTypedFactory needs a method "New"');
-  Result := fResolver.CreateInstance(TClass(T)).AsType<T>;
-end;
+{ TTypedFactoryHelper - placeholder }
 
 { TIocServiceLocator }
 
@@ -848,7 +910,7 @@ begin
   Result := GlobalContainer.Resolve<T>;
 end;
 
-class function TIocServiceLocator.TryToGetService<T>(aService : T) : Boolean;
+class function TIocServiceLocator.TryToGetService<T>(out aService : T) : Boolean;
 begin
   Result := GlobalContainer.IsRegistered<T>('');
   if Result then aService := GlobalContainer.Resolve<T>;

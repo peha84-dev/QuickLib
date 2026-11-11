@@ -1,13 +1,13 @@
 { ***************************************************************************
 
-  Copyright (c) 2016-2020 Kike Pérez
+  Copyright (c) 2016-2026 Kike Perez
 
   Unit        : Quick.Pooling
   Description : Pooling objects
-  Author      : Kike Pérez
+  Author      : Kike Perez
   Version     : 1.9
   Created     : 28/02/2020
-  Modified    : 29/02/2020
+  Modified    : 01/05/2026
 
   This file is part of QuickLib: https://github.com/exilon/QuickLib
 
@@ -295,22 +295,22 @@ end;
 
 function TPoolItem<T>._Release: Integer;
 begin
+  fLock.Enter;
   {$IFDEF DEBUG_OBJPOOL}
   TDebugger.Trace(Self,'Released Pool item');
   {$ENDIF}
   try
-    result:=AtomicDecrement(fRefCount);
+    Dec(fRefCount);
+    Result := fRefCount;
     if Result = 0 then
     begin
       FreeAndNil(fItem);
-      // The following is take from TInterfacedObject._Release()
-      // Mark the refcount field so that any refcounting during destruction doesn't infinitely recurse.
-      __MarkDestroying(Self);
       Destroy;
     end
     else fLastAccess := Now;
   finally
     if fRefCount = 1 then fSemaphore.Release;
+    fLock.Leave;
   end;
 end;
 

@@ -1,11 +1,11 @@
-﻿{ ***************************************************************************
-  Copyright (c) 2015-2021 Kike P�rez
+{ ***************************************************************************
+  Copyright (c) 2015-2026 Kike Perez
   Unit        : Quick.YAML.Serializer
   Description : YAML Serializer
-  Author      : Kike P�rez
+  Author      : Kike Perez
   Version     : 1.0
   Created     : 12/04/2019
-  Modified    : 05/08/2021
+  Modified    : 01/05/2026
   This file is part of QuickLib: https://github.com/exilon/QuickLib
  ***************************************************************************
   Licensed under the Apache License, Version 2.0 (the "License");
@@ -175,6 +175,7 @@ var
   pArr: Pointer;
   rItemValue: TValue;
   i: Integer;
+  itemIndex: Integer;
   objClass: TClass;
   ctx : TRttiContext;
   Yaml : TYamlObject;
@@ -192,9 +193,11 @@ begin
     TValue.Make(@pArr,aTypeInfo, Result);
     rDynArray := ctx.GetType(Result.TypeInfo) as TRTTIDynamicArrayType;
 
+    itemIndex := -1;
     try
       for i := 0 to aYamlArray.Count - 1 do
       begin
+        itemIndex := i;
         rItemValue := nil;
         case rType.Kind of
           tkClass :
@@ -236,7 +239,7 @@ begin
     except
       on E : Exception do
       begin
-        raise Exception.CreateFmt('Array %s item %d error (%s)',[rtype.Name, i, e.Message]);
+        raise Exception.CreateFmt('Array %s item %d error (%s)',[rtype.Name, itemIndex, e.Message]);
       end;
     end;
     //aProperty.SetValue(aObject,rValue);
@@ -619,7 +622,25 @@ begin
           end;
         tkClass :
           begin
-            //if (member.YamlValue is TYamlObject) then
+            // Issue #147: if the YAML value for this property is explicitly null
+            // (or an empty scalar), the property must be set to nil.
+            // The YAML parser represents 'null' as a TYamlString with value 'null'
+            // rather than a TYamlNull instance, so we compare the string value.
+            // An empty scalar ('child:' with no value) is also treated as null.
+            if (member.Value = nil) or (member.Value is TYamlNull)
+               or (CompareText(member.Value.AsString, 'null') = 0)
+               or (Trim(member.Value.AsString) = '') then
+            begin
+              // Nil the property reference.
+              // TValue.From(Pointer(nil)) produces a TValue<Pointer> which
+              // Delphi RTTI accepts as nil for any class-typed property.
+              {$IFNDEF FPC}
+              aProperty.SetValue(aObject, TValue.From(Pointer(nil)));
+              {$ELSE}
+              SetObjectProp(aObject, aName, nil);
+              {$ENDIF}
+              Exit;
+            end;
             begin
               Yaml := TYamlObject(TYamlObject.ParseYamlValue(member.ToYaml));
               try
@@ -1561,6 +1582,11 @@ function TYamlSerializer.YamlToObject(aType: TClass; const aYaml: string): TObje
 var
   Yaml: TYamlObject;
 begin
+  if aYaml.Trim = '' then
+  begin
+    Result := nil;
+    Exit;
+  end;
   Yaml := TYamlObject.ParseYamlValue(aYaml) as TYamlObject;
   try
     Result := fRTTIYaml.DeserializeClass(aType,Yaml);
@@ -1592,6 +1618,11 @@ function TYamlSerializer.ObjectToYaml(aObject : TObject): string;
 var
   Yaml: TYamlObject;
 begin
+  if aObject = nil then
+  begin
+    Result := '';
+    Exit;
+  end;
   Yaml := fRTTIYaml.Serialize(aObject);
   try
     Result := Yaml.ToYaml;

@@ -1,13 +1,13 @@
 { ***************************************************************************
 
-  Copyright (c) 2015-2022 Kike Pérez
+  Copyright (c) 2015-2026 Kike Perez
 
   Unit        : Quick.Data.Redis
   Description : Redis client
-  Author      : Kike Pérez
+  Author      : Kike Perez
   Version     : 1.0
   Created     : 22/02/2020
-  Modified    : 07/03/2022
+  Modified    : 12/07/2020
 
   This file is part of QuickLib: https://github.com/exilon/QuickLib
 
@@ -381,7 +381,9 @@ var
 begin
   rediscmd := TRedisCommand.Create('SET')
                .AddArgument(aKey)
-               .AddArgument(aValue)
+               .AddArgument(aValue);
+  if aTTLMs > 0 then
+    rediscmd := rediscmd
                .AddArgument('PX')
                .AddArgument(aTTLMs);
   Result := Command(rediscmd.ToCommand).IsDone;

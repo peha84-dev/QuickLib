@@ -1,13 +1,13 @@
-﻿{ ***************************************************************************
+{ ***************************************************************************
 
-  Copyright (c) 2016-2024 Kike Pérez
+  Copyright (c) 2016-2026 Kike Perez
 
   Unit        : Quick.Console
   Description : Console output with colors and optional file log
-  Author      : Kike Pérez
+  Author      : Kike Perez
   Version     : 1.9
   Created     : 10/05/2017
-  Modified    : 20/01/2024
+  Modified    : 08/05/2026
 
   This file is part of QuickLib: https://github.com/exilon/QuickLib
 
@@ -365,12 +365,14 @@ end;
 
 procedure CursorOn;
 begin
-  //not implemented yet
+  Write(AEC, '?25h');
+  Flush(Output);
 end;
 
 procedure CursorOff;
 begin
-  //not implemented yet
+  Write(AEC, '?25l');
+  Flush(Output);
 end;
 
 function ReadKey : Char;
@@ -881,12 +883,12 @@ begin
             end;
             //Application.ProcessMessages;
           until (dRunning <> WAIT_TIMEOUT);
+          GetExitCodeProcess(piProcess.hProcess,Result);
         finally
           CloseHandle(piProcess.hProcess);
           CloseHandle(piProcess.hThread);
         end;
       end;
-      GetExitCodeProcess(piProcess.hProcess,Result);
     finally
       CloseHandle(hRead);
       CloseHandle(hWrite);
@@ -912,9 +914,9 @@ begin
   {$ENDIF}
   if not GetConsoleScreenBufferInfo(hStdOut, BufferInfo) then
   begin
-    {$IFNDEF FPC}
-    SetInOutRes(GetLastError);
-    {$ENDIF}
+    // Do NOT set InOutRes here — the handle may be a pipe (redirected stdout)
+    // which is valid but not a console. Setting InOutRes(6) would break all
+    // subsequent Pascal I/O (Writeln etc.) causing EInOutError in callers.
     Exit;
   end;
   ConsoleRect.Left := 0;
